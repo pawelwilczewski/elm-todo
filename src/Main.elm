@@ -1,9 +1,17 @@
-module Main exposing (main)
+port module Main exposing (main)
 
 import Browser
 import Html exposing (Html, button, div, input, li, text, ul)
 import Html.Attributes exposing (checked, placeholder, type_, value)
 import Html.Events exposing (onClick, onInput)
+import Json.Decode as Decode exposing (decodeString)
+import Json.Encode as Encode exposing (Value)
+
+
+port saveTodos : Encode.Value -> Cmd msg
+
+
+port loadTodos : (Decode.Value -> msg) -> Sub msg
 
 
 type alias Model =
@@ -19,11 +27,13 @@ type alias Todo =
     }
 
 
-init : Model
-init =
-    { todos = []
-    , input = ""
-    }
+init : () -> ( Model, Cmd Msg )
+init _ =
+    ( { todos = []
+      , input = ""
+      }
+    , Cmd.none
+    )
 
 
 type Msg
@@ -31,13 +41,54 @@ type Msg
     | AddTodo
     | ToggleTodo Int
     | DeleteTodo Int
+    | TodosLoaded (List Todo)
 
 
-update : Msg -> Model -> Model
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    loadTodos
+        (\value ->
+            case Decode.decodeValue decodeTodos value of
+                Ok todos ->
+                    TodosLoaded todos
+
+                Err _ ->
+                    TodosLoaded []
+        )
+
+
+encodeTodo : Todo -> Encode.Value
+encodeTodo todo =
+    Encode.object
+        [ ( "id", Encode.int todo.id )
+        , ( "text", Encode.string todo.text )
+        , ( "completed", Encode.bool todo.completed )
+        ]
+
+
+encodeTodos : List Todo -> Encode.Value
+encodeTodos todos =
+    Encode.list encodeTodo todos
+
+
+decodeTodo : Decode.Decoder Todo
+decodeTodo =
+    Decode.map3 Todo
+        (Decode.field "id" Decode.int)
+        (Decode.field "text" Decode.string)
+        (Decode.field "completed" Decode.bool)
+
+
+decodeTodos : Decode.Decoder (List Todo)
+decodeTodos =
+    Decode.list decodeTodo
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         UpdateInput str ->
-            { model | input = str }
+            ( { model | input = str }, Cmd.none )
 
         AddTodo ->
             let
@@ -54,11 +105,14 @@ update msg model =
                     , text = model.input
                     , completed = False
                     }
+
+                newModel =
+                    { model
+                        | todos = model.todos ++ [ newTodo ]
+                        , input = ""
+                    }
             in
-            { model
-                | todos = model.todos ++ [ newTodo ]
-                , input = ""
-            }
+            ( newModel, saveTodos (encodeTodos newModel.todos) )
 
         ToggleTodo index ->
             let
@@ -68,11 +122,21 @@ update msg model =
 
                     else
                         todo
+
+                newModel =
+                    { model | todos = List.map toggle model.todos }
             in
-            { model | todos = List.map toggle model.todos }
+            ( newModel, saveTodos (encodeTodos newModel.todos) )
 
         DeleteTodo index ->
-            { model | todos = List.filter (\todo -> todo.id /= index) model.todos }
+            let
+                newModel =
+                    { model | todos = List.filter (\todo -> todo.id /= index) model.todos }
+            in
+            ( newModel, saveTodos (encodeTodos newModel.todos) )
+
+        TodosLoaded todos ->
+            ( { model | todos = todos }, Cmd.none )
 
 
 view : Model -> Html Msg
@@ -103,5 +167,11 @@ viewTodo todo =
         ]
 
 
+main : Program () Model Msg
 main =
-    Browser.sandbox { init = init, update = update, view = view }
+    Browser.element
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        }
