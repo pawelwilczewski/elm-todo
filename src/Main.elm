@@ -1,11 +1,12 @@
 port module Main exposing (main)
 
 import Browser
-import Html exposing (Html, button, div, input, li, text, ul)
-import Html.Attributes exposing (checked, placeholder, type_, value)
+import Html exposing (Html, button, div, input, text, ul)
+import Html.Attributes exposing (placeholder, value)
 import Html.Events exposing (onClick, onInput)
-import Json.Decode as Decode exposing (decodeString)
-import Json.Encode as Encode exposing (Value)
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Todo exposing (Todo, TodoMsg(..), decodeTodos, encodeTodos)
 
 
 port saveTodos : Encode.Value -> Cmd msg
@@ -20,13 +21,6 @@ type alias Model =
     }
 
 
-type alias Todo =
-    { id : Int
-    , text : String
-    , completed : Bool
-    }
-
-
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { todos = []
@@ -38,50 +32,21 @@ init _ =
 
 type Msg
     = UpdateInput String
-    | AddTodo
-    | ToggleTodo Int
-    | DeleteTodo Int
-    | TodosLoaded (List Todo)
+    | TodoMsg TodoMsg
 
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
-    loadTodos
-        (\value ->
-            case Decode.decodeValue decodeTodos value of
-                Ok todos ->
-                    TodosLoaded todos
+    Sub.map TodoMsg <|
+        loadTodos
+            (\value ->
+                case Decode.decodeValue decodeTodos value of
+                    Ok todos ->
+                        TodosLoaded todos
 
-                Err _ ->
-                    TodosLoaded []
-        )
-
-
-encodeTodo : Todo -> Encode.Value
-encodeTodo todo =
-    Encode.object
-        [ ( "id", Encode.int todo.id )
-        , ( "text", Encode.string todo.text )
-        , ( "completed", Encode.bool todo.completed )
-        ]
-
-
-encodeTodos : List Todo -> Encode.Value
-encodeTodos todos =
-    Encode.list encodeTodo todos
-
-
-decodeTodo : Decode.Decoder Todo
-decodeTodo =
-    Decode.map3 Todo
-        (Decode.field "id" Decode.int)
-        (Decode.field "text" Decode.string)
-        (Decode.field "completed" Decode.bool)
-
-
-decodeTodos : Decode.Decoder (List Todo)
-decodeTodos =
-    Decode.list decodeTodo
+                    Err _ ->
+                        TodosLoaded []
+            )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -90,53 +55,14 @@ update msg model =
         UpdateInput str ->
             ( { model | input = str }, Cmd.none )
 
-        AddTodo ->
+        TodoMsg todoMsg ->
             let
-                newId =
-                    case List.maximum (List.map .id model.todos) of
-                        Nothing ->
-                            1
-
-                        Just value ->
-                            value + 1
-
-                newTodo =
-                    { id = newId
-                    , text = model.input
-                    , completed = False
-                    }
-
-                newModel =
-                    { model
-                        | todos = model.todos ++ [ newTodo ]
-                        , input = ""
-                    }
+                ( newTodos, todoCmd ) =
+                    Todo.update todoMsg model.todos model.input
             in
-            ( newModel, saveTodos (encodeTodos newModel.todos) )
-
-        ToggleTodo index ->
-            let
-                toggle todo =
-                    if todo.id == index then
-                        { todo | completed = not todo.completed }
-
-                    else
-                        todo
-
-                newModel =
-                    { model | todos = List.map toggle model.todos }
-            in
-            ( newModel, saveTodos (encodeTodos newModel.todos) )
-
-        DeleteTodo index ->
-            let
-                newModel =
-                    { model | todos = List.filter (\todo -> todo.id /= index) model.todos }
-            in
-            ( newModel, saveTodos (encodeTodos newModel.todos) )
-
-        TodosLoaded todos ->
-            ( { model | todos = todos }, Cmd.none )
+            ( { model | todos = newTodos, input = "" }
+            , Cmd.batch [ saveTodos (encodeTodos newTodos), Cmd.map TodoMsg todoCmd ]
+            )
 
 
 view : Model -> Html Msg
@@ -148,22 +74,8 @@ view model =
             , onInput UpdateInput
             ]
             []
-        , button [ onClick AddTodo ] [ text "Add" ]
-        , ul [] (List.map viewTodo model.todos)
-        ]
-
-
-viewTodo : Todo -> Html Msg
-viewTodo todo =
-    li []
-        [ input
-            [ type_ "checkbox"
-            , checked todo.completed
-            , onClick (ToggleTodo todo.id)
-            ]
-            []
-        , text todo.text
-        , button [ onClick (DeleteTodo todo.id) ] [ text "x" ]
+        , button [ onClick (TodoMsg AddTodo) ] [ text "Add" ]
+        , Html.map TodoMsg <| ul [] (List.map (Todo.viewTodo ToggleTodo DeleteTodo) model.todos)
         ]
 
 
